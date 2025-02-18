@@ -7,7 +7,7 @@ CFLAGS       	= 	-O3 \
 					-Wno-parentheses-equality -Wno-pointer-sign -fno-rtti -fno-exceptions \
 					-DWEBASSEMBLY_BUILD
 
-CXX_LINK     	= 	$(CXX) -o $@ $(CFLAGS)
+CXX_LINK     	= 	$(CXX) -o $@ $(CFLAGS) -lidbfs.js
 
 TEXSOURCES   	= 	tex/pdftex0.c \
 					tex/pdftexini.c \
