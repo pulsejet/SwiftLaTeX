@@ -364,7 +364,7 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
   }
 
   // Check if file exists in opfs directory
-  sprintf(local_name, "/pdftex/%d/%s", format, name);
+  sprintf(local_name, "/__pdftex/%d/%s", format, name);
   if (access(local_name, F_OK) != -1) {
     return local_name;
   }
@@ -398,7 +398,7 @@ char* kpse_find_pk(const char* fontname, unsigned int dpi) {
   }
 
   // Check if file exists in opfs directory
-  sprintf(local_name, "/pdftex/pk/%d/%s", dpi, fontname);
+  sprintf(local_name, "/__pdftex/pk/%d/%s", dpi, fontname);
   if (access(local_name, F_OK) != -1) {
     return local_name;
   }

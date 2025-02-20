@@ -246,7 +246,10 @@ function kpse_find_file_impl(nameptr) {
     if (texlive404_cache.has(filepath))
         return 0;
 
-    const remote_url = `${texlive_endpoint}${filepath}`;
+    // make the url conforming to the texlive endpoint
+    const fileurlpath = filepath.replace("/__pdftex/", "/pdftex/");
+
+    const remote_url = `${texlive_endpoint}${fileurlpath}`;
     let xhr = new XMLHttpRequest();
     xhr.open("GET", remote_url, false);
     xhr.timeout = 150000;
