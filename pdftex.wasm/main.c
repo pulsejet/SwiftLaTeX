@@ -591,6 +591,38 @@ int setMainEntry(const char *p) {
     return 0;
 }
 
+int wasmSetupDirs(const char *filename) {
+    // Recursively create directory
+    char *dir = strdup(filename);
+    char *ppos = dir;
+    while (*ppos) {
+        if (*ppos == '/') {
+            *ppos = 0;
+            mkdir(dir, 0777); // ignore error
+            *ppos = '/';
+        }
+        ppos++;
+    }
+    free(dir);
+}
+
+int wasmWriteFile(const char *filename, const uint8_t *content, int len) {
+    wasmSetupDirs(filename);
+
+    int ret = -1;
+    FILE *f = fopen(filename, "wb");
+    if (f != NULL) {
+        fwrite(content, 1, len, f);
+        fclose(f);
+        ret = 0;
+    } else {
+        fprintf(stderr, "Failed to open file %s\n", filename);
+    }
+
+    free((void *)content);
+    return ret;
+}
+
 int main(int argc, char **argv) {
     backend_t opfs = wasmfs_create_opfs_backend();
     int err = wasmfs_create_directory("/opfs", 0777, opfs);

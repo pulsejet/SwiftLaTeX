@@ -55,48 +55,35 @@ function restoreHeapMemory() {
     }
 }
 
-function prepareExecutionContext() {
+/**
+ * Write folder to FS recursively
+ * @param {FileSystemDirectoryHandle} folder
+ * @param {string} path
+ */
+async function writeFs(folder, path) {
+    if (!FS.analyzePath(path).exists)
+        FS.mkdir(path);
+
+    for await (const [name, handle] of folder.entries()) {
+        if (handle instanceof FileSystemFileHandle) {
+            const content = await handle.getFile();
+            const bytes = await content.arrayBuffer();
+            FS.writeFile(`${path}/${name}`, new Uint8Array(bytes));
+        } else if (handle instanceof FileSystemDirectoryHandle) {
+            await writeFs(handle, `${path}/${name}`);
+        }
+    }
+}
+
+async function prepareExecutionContext() {
     self.memlog = '';
     restoreHeapMemory();
+
+    // await writeFs(await self.navigator.storage.getDirectory(), '/opfs');
 }
 
-function cleanDir(dir) {
-    let l = FS.readdir(dir);
-    for (let i in l) {
-        let item = l[i];
-        if (item === "." || item === "..") {
-            continue;
-        }
-        item = dir + "/" + item;
-        let fsStat = undefined;
-        try {
-            fsStat = FS.stat(item);
-        } catch (err) {
-            console.error("Not able to fsstat " + item);
-            continue;
-        }
-        if (FS.isDir(fsStat.mode)) {
-            cleanDir(item);
-        } else {
-            try {
-                FS.unlink(item);
-            } catch (err) {
-                console.error("Not able to unlink " + item);
-            }
-        }
-    }
-
-    if (dir !== WORKROOT) {
-        try {
-            FS.rmdir(dir);
-        } catch (err) {
-            console.error("Not able to top level " + dir);
-        }
-    }
-}
-
-function compileLaTeXRoutine() {
-    prepareExecutionContext();
+async function compileLaTeXRoutine() {
+    await prepareExecutionContext();
 
     // Set the main entry to compile
     cwrap('setMainEntry', 'number', ['string'])(self.mainfile);
@@ -196,15 +183,19 @@ function mkdirRoutine(dirname) {
 }
 
 function writeFileRecursive(filename, content) {
-    const parts = filename.substring(0, filename.lastIndexOf("/")).split("/");
-    let current = String();
-    for (let i = 0; i < parts.length; i++) {
-        current += "/" + parts[i];
-        if (!FS.analyzePath(current).exists) {
-            FS.mkdir(current);
-        }
+    if (typeof content === 'string') {
+        content = new TextEncoder().encode(content);
+    } else if (content instanceof ArrayBuffer) {
+        // Do nothing
+    } else if (content instanceof Uint8Array) {
+        // Do nothing
+    } else {
+        throw new Error("Invalid content type");
     }
-    FS.writeFile(filename, content);
+
+    const c_content = _allocate(content);
+    cwrap('wasmWriteFile', 'number', ['string', 'number', 'number'])
+        (filename, c_content, content.length);
 }
 
 function writeFileRoutine(filename, content) {
@@ -246,7 +237,7 @@ self['onmessage'] = function(ev) {
         console.error("Gracefully Close");
         self.close();
     } else if (cmd === "flushcache") {
-        cleanDir(WORKROOT);
+        // cleanDir(WORKROOT);
     } else {
         console.error("Unknown command " + cmd);
     }

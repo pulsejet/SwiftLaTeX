@@ -366,7 +366,6 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
   }
 
   // Check if file exists in opfs directory
-  memset(local_name, 0, MAX_PATH_LEN + 32);
   sprintf(local_name, "/opfs/pdftex/%d/%s", format, name);
   if (access(local_name, F_OK) != -1) {
     return local_name;
