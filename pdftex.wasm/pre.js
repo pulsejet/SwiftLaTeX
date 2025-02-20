@@ -1,10 +1,7 @@
-const TEXCACHEROOT = "/pdftex";
-const WORKROOT = "/work";
-
 var Module = {};
 
 /** @type {string} Log from WASM */
-self.memlog = "";
+let memlog = String();
 
 /** @type {Uint8Array} Initialized WASM memory */
 let initmem = undefined;
@@ -13,11 +10,11 @@ let initmem = undefined;
 let texlive_endpoint = "https://texlive2.swiftlatex.com";
 
 Module['print'] = function (a) {
-    self.memlog += (a + "\n");
+    memlog += (a + "\n");
 };
 
 Module['printErr'] = function (a) {
-    self.memlog += (a + "\n");
+    memlog += (a + "\n");
     console.warn(a);
 };
 
@@ -27,11 +24,11 @@ Module['postRun'] = function () {
 };
 
 Module['onAbort'] = function () {
-    self.memlog += 'Engine crashed';
+    memlog += 'Engine crashed';
     self.postMessage({
         'result': 'failed',
         'status': -254,
-        'log': self.memlog,
+        'log': memlog,
         'cmd': 'compile'
     });
     return;
@@ -96,8 +93,11 @@ async function prepareFS(folder, path) {
     }
 }
 
+/**
+ * Prepare the execution context for the WASM engine
+ */
 async function prepareExecutionContext() {
-    self.memlog = '';
+    memlog = String();
     restoreHeapMemory();
 
     // Prepare memory FS from OPFS.
@@ -109,16 +109,20 @@ async function prepareExecutionContext() {
 
 /**
  * Routine to compile the main TeX file
+ * @param {string} workdir Working directory
+ * @param {string} mainfile Main TeX file
  * @returns {void}
  */
-async function compileLaTeXRoutine() {
+async function compileLaTeXRoutine(workdir, mainfile) {
     let status = -253;
 
     try {
         await prepareExecutionContext();
 
+        // Change to the working directory
+        FS.chdir(workdir);
+
         // Set the main entry to compile
-        const mainfile = "main.tex";
         cwrap('setMainEntry', 'number', ['string'])(mainfile);
 
         // Compile LaTeX
@@ -130,13 +134,13 @@ async function compileLaTeXRoutine() {
 
         // Fetch the PDF file
         const mainbasename = mainfile.split('.').slice(0, -1).join('.');
-        const pdfurl = `${WORKROOT}/${mainbasename}.pdf`;
+        const pdfurl = `${workdir}/${mainbasename}.pdf`;
         const pdfArrayBuffer = FS.readFile(pdfurl, { encoding: 'binary' });
 
         self.postMessage({
             'result': 'ok',
             'status': status,
-            'log': self.memlog,
+            'log': memlog,
             'pdf': pdfArrayBuffer.buffer,
             'cmd': 'compile'
         }, [pdfArrayBuffer.buffer]);
@@ -145,7 +149,7 @@ async function compileLaTeXRoutine() {
         self.postMessage({
             'result': 'failed',
             'status': status,
-            'log': `${self.memlog}\n${err}`,
+            'log': `${memlog}\n${err}`,
             'cmd': 'compile'
         });
     }
@@ -163,13 +167,14 @@ async function compileFormatRoutine() {
         let status = _compileFormat();
         if (status !== 0) throw new Error("Format compilation failed");
 
-        const formatUrl = `${WORKROOT}/pdflatex.fmt`;
+        FS.chdir('/');
+        const formatUrl = `/pdflatex.fmt`;
         const formatBuffer = FS.readFile(formatUrl, { encoding: 'binary' });
 
         self.postMessage({
             'result': 'ok',
             'status': status,
-            'log': self.memlog,
+            'log': memlog,
             'format': formatBuffer.buffer,
             'cmd': 'compile'
         }, [formatBuffer.buffer]);
@@ -178,7 +183,7 @@ async function compileFormatRoutine() {
         self.postMessage({
             'result': 'failed',
             'status': status,
-            'log': `${self.memlog}\n\n${err}`,
+            'log': `${memlog}\n\n${err}`,
             'cmd': 'compile'
         });
     }
@@ -271,7 +276,7 @@ self.onmessage = function (event) {
     const cmd = data.cmd;
 
     if (cmd === 'compilelatex') {
-        compileLaTeXRoutine();
+        compileLaTeXRoutine(data.workdir, data.mainfile);
     } else if (cmd === 'compileformat') {
         compileFormatRoutine();
     } else if (cmd === "settexliveurl") {

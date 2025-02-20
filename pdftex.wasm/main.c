@@ -555,7 +555,6 @@ int _compile() {
 }
 
 int compileLaTeX() {
-    chdir("/work");
     if (strlen(main_entry_file) == 0) {
       return -1;
     }
