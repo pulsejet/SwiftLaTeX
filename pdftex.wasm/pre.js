@@ -241,7 +241,7 @@ const texlive404_cache = new Set();
 function kpse_find_file_impl(nameptr) {
     /** @type {string} */
     const filepath = UTF8ToString(nameptr);
-    if (filepath.endsWith(".vf") || filepath.endsWith(".aux"))
+    if (filepath.endsWith(".vf") || filepath.endsWith(".aux") || filepath.includes("./"))
         return 0;
     if (texlive404_cache.has(filepath))
         return 0;
