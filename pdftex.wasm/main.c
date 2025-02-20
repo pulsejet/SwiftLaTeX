@@ -555,7 +555,7 @@ int _compile() {
 }
 
 int compileLaTeX() {
-    chdir("/opfs/work");
+    chdir("/work");
     if (strlen(main_entry_file) == 0) {
       return -1;
     }
@@ -624,9 +624,10 @@ int wasmWriteFile(const char *filename, const uint8_t *content, int len) {
 }
 
 int main(int argc, char **argv) {
-    backend_t opfs = wasmfs_create_opfs_backend();
-    int err = wasmfs_create_directory("/opfs", 0777, opfs);
-    assert(err == 0);
+    // OPFS is too slow for now, wait for JSPI
+    // backend_t opfs = wasmfs_create_opfs_backend();
+    // int err = wasmfs_create_directory("/", 0777, opfs);
+    // assert(err == 0);
 }
 
 #endif

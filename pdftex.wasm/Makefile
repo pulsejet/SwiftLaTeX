@@ -5,11 +5,9 @@ CXX          	= 	em++
 CFLAGS       	= 	-O3 \
 					-s USE_ZLIB=1 -s USE_LIBPNG=1 \
 					-Wno-parentheses-equality -Wno-pointer-sign -fno-rtti -fno-exceptions \
-					-DWEBASSEMBLY_BUILD -matomics
+					-DWEBASSEMBLY_BUILD
 
-CXX_LINK     	= 	$(CXX) -o $@ $(CFLAGS) -s WASMFS=1 -sFORCE_FILESYSTEM \
-						-pthread -sPTHREAD_POOL_SIZE=2 \
-						-s INITIAL_MEMORY=33554432
+CXX_LINK     	= 	$(CXX) -o $@ $(CFLAGS)
 
 TEXSOURCES   	= 	tex/pdftex0.c \
 					tex/pdftexini.c \
@@ -57,7 +55,7 @@ _default:
 all: $(PROJECT_NAME)
 
 $(PROJECT_NAME): $(HEADERS) $(TEXOBJECTS) $(PDFOBJECTS) $(EPDFOBJECTS)
-	@$(CXX_LINK) $(TEXOBJECTS) $(PDFOBJECTS) $(EPDFOBJECTS) xpdf/xpdf.a  --js-library library.js  --pre-js pre.js \
+	@$(CXX_LINK) $(TEXOBJECTS) $(PDFOBJECTS) $(EPDFOBJECTS) xpdf/xpdf.a --pre-js pre.js \
 	-s EXPORTED_FUNCTIONS='["_compileBibtex", "_compileLaTeX", "_compileFormat", "_main", "_setMainEntry", "_malloc", "_wasmWriteFile"]' \
 	-s EXPORTED_RUNTIME_METHODS=["cwrap"] -s NO_EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 && \
 	echo -e "\033[32m[DONE]\033[0m $(PROJECT_NAME)" || \

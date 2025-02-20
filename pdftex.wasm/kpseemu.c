@@ -8,11 +8,9 @@
 
 #include <emscripten.h>
 
-EM_JS(char*, kpse_find_file_js, (const char* name, kpse_file_format_type format, boolean must_exist), {
-  return kpse_find_file_impl(name, format, must_exist);
+EM_JS(char*, kpse_find_file_js, (const char* name), {
+  return kpse_find_file_impl(name);
 });
-
-extern char* kpse_find_pk_js(const char* passed_fontname,  unsigned int dpi);
 
 void setupboundvariable(integer *var, const_string var_name, integer dflt) {
 
@@ -366,20 +364,20 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
   }
 
   // Check if file exists in opfs directory
-  sprintf(local_name, "/opfs/pdftex/%d/%s", format, name);
+  sprintf(local_name, "/pdftex/%d/%s", format, name);
   if (access(local_name, F_OK) != -1) {
     return local_name;
   }
 
-  // End local Search
-  free(local_name);
-
   // Head to network search
-  return kpse_find_file_js(name, format, must_exist);
+  char* net_name = kpse_find_file_js(local_name);
+
+  free(local_name);
+  return net_name;
 
 }
 
-char* kpse_find_pk(const char* fontname,  unsigned int dpi) {
+char* kpse_find_pk(const char* fontname, unsigned int dpi) {
   if (fontname == NULL) {
     return NULL;
   }
@@ -395,14 +393,19 @@ char* kpse_find_pk(const char* fontname,  unsigned int dpi) {
   }
 
   sprintf(local_name, "%s.%dpk", fontname, dpi);
-
   if (access(local_name, F_OK) != -1) {
     return local_name;
   }
 
-  // End local Search
-  free(local_name);
+  // Check if file exists in opfs directory
+  sprintf(local_name, "/pdftex/pk/%d/%s", dpi, fontname);
+  if (access(local_name, F_OK) != -1) {
+    return local_name;
+  }
 
   // Head to network search
-  return kpse_find_pk_js(fontname, dpi);
+  char* net_name = kpse_find_file_js(local_name);
+
+  free(local_name);
+  return net_name;
 }

@@ -1,6 +1,5 @@
 const TEXCACHEROOT = "/pdftex";
 const WORKROOT = "/work";
-const OPFS_PREFIX = "/opfs";
 
 var Module = {};
 self.memlog = "";
@@ -60,17 +59,32 @@ function restoreHeapMemory() {
  * @param {FileSystemDirectoryHandle} folder
  * @param {string} path
  */
-async function writeFs(folder, path) {
+async function prepareFS(folder, path) {
+    if (folder === null) {
+        const root = await self.navigator.storage.getDirectory();
+        return await prepareFS(root, path);
+    }
+
+    // Create folder if not exists
     if (!FS.analyzePath(path).exists)
         FS.mkdir(path);
 
+    // Write files and folders recursively
     for await (const [name, handle] of folder.entries()) {
+        const filepath = `${path}/${name}`;
+
         if (handle instanceof FileSystemFileHandle) {
             const content = await handle.getFile();
+
+            // Skip if file exists and not modified
+            if (FS.analyzePath(filepath).exists && content.lastModified <= (FS.stat(filepath)?.mtime ?? 0))
+                continue;
+
             const bytes = await content.arrayBuffer();
-            FS.writeFile(`${path}/${name}`, new Uint8Array(bytes));
+            FS.writeFile(filepath, new Uint8Array(bytes));
+            FS.utime(filepath, content.lastModified, content.lastModified);
         } else if (handle instanceof FileSystemDirectoryHandle) {
-            await writeFs(handle, `${path}/${name}`);
+            await prepareFS(handle, filepath);
         }
     }
 }
@@ -79,7 +93,10 @@ async function prepareExecutionContext() {
     self.memlog = '';
     restoreHeapMemory();
 
-    // await writeFs(await self.navigator.storage.getDirectory(), '/opfs');
+    // Prepare memory FS from OPFS.
+    // When JSPI is available, hopefully WASMFS will be fast enough to be used
+    // directly, and we can skip this step entirely.
+    await prepareFS(null, '/');
 }
 
 async function compileLaTeXRoutine() {
@@ -93,10 +110,9 @@ async function compileLaTeXRoutine() {
         let pdfArrayBuffer = null;
         _compileBibtex();
         try {
-            let pdfurl = WORKROOT + "/" + self.mainfile.substr(0, self.mainfile.length - 4) + ".pdf";
-            pdfArrayBuffer = FS.readFile(pdfurl, {
-                encoding: 'binary'
-            });
+            const mainbasename = self.mainfile.split('.').slice(0, -1).join('.');
+            const pdfurl = `${WORKROOT}/${mainbasename}.pdf`;
+            pdfArrayBuffer = FS.readFile(pdfurl, { encoding: 'binary' });
         } catch (err) {
             console.error("Fetch content failed.");
             status = -253;
@@ -182,12 +198,17 @@ function mkdirRoutine(dirname) {
     }
 }
 
-function writeFileRecursive(filename, content) {
+/**
+ * Write file to WASM memory FS recursively.
+ * Optionally persist to OPFS.
+ * @param {string} filename Full path of the file
+ * @param {Uint8Array | string} content Content to write
+ * @param {boolean} opfs Persist to OPFS
+ */
+function writeFileRecursive(filename, content, opfs) {
     if (typeof content === 'string') {
         content = new TextEncoder().encode(content);
-    } else if (content instanceof ArrayBuffer) {
-        // Do nothing
-    } else if (content instanceof Uint8Array) {
+    } else if (content instanceof ArrayBuffer || content instanceof Uint8Array) {
         // Do nothing
     } else {
         throw new Error("Invalid content type");
@@ -196,11 +217,35 @@ function writeFileRecursive(filename, content) {
     const c_content = _allocate(content);
     cwrap('wasmWriteFile', 'number', ['string', 'number', 'number'])
         (filename, c_content, content.length);
+
+    if (opfs) {
+        writeFileOpfsRecursive(filename, content).catch(console.error);
+    }
+}
+
+/**
+ * Write file to OPFS recursively
+ * @param {string} filename Full path of the file
+ * @param {Uint8Array} content File content
+ */
+async function writeFileOpfsRecursive(filename, content) {
+    let folder = await self.navigator.storage.getDirectory();
+    const parts = filename.split('/').filter(Boolean);
+    for (let i = 0; i < parts.length - 1; i++) {
+        folder = await folder.getDirectoryHandle(parts[i], { create: true });
+    }
+
+    const basename = parts[parts.length - 1];
+    if (!basename) return;
+    const file = await folder.getFileHandle(basename, { create: true });
+    const writable = await file.createWritable();
+    await writable.write(content);
+    await writable.close();
 }
 
 function writeFileRoutine(filename, content) {
     try {
-        writeFileRecursive(`${OPFS_PREFIX}${WORKROOT}${filename}`, content);
+        writeFileRecursive(`${WORKROOT}${filename}`, content, false);
         self.postMessage({
             'result': 'ok',
             'cmd': 'writefile'
@@ -244,14 +289,11 @@ self['onmessage'] = function(ev) {
 };
 
 const texlive404_cache = new Set();
-function kpse_find_file_impl(nameptr, format, _mustexist) {
-    const reqname = UTF8ToString(nameptr);
-    if (reqname.includes("/"))
+function kpse_find_file_impl(nameptr) {
+    /** @type {string} */
+    const filepath = UTF8ToString(nameptr);
+    if (filepath.endsWith(".vf") || filepath.endsWith(".aux"))
         return 0;
-    if (reqname.endsWith(".vf") || reqname.endsWith(".aux"))
-        return 0;
-
-    const filepath = `${TEXCACHEROOT}/${format}/${reqname}`;
     if (texlive404_cache.has(filepath))
         return 0;
 
@@ -264,54 +306,18 @@ function kpse_find_file_impl(nameptr, format, _mustexist) {
     try {
         xhr.send();
     } catch (err) {
-        console.log("TexLive Download Failed " + remote_url);
+        console.warn("TexLive download failed: " + remote_url);
         return 0;
     }
 
     if (xhr.status === 200) {
-        writeFileRecursive(OPFS_PREFIX + filepath, new Uint8Array(xhr.response));
-        return _allocate(intArrayFromString(OPFS_PREFIX + filepath));
+        writeFileRecursive(filepath, new Uint8Array(xhr.response), true);
+        return _allocate(intArrayFromString(filepath));
     } else if (xhr.status === 301) {
-        console.warn("TexLive File not exists " + remote_url);
-        texlive404_cache.add(filepath);
-        return 0;
-    }
-    return 0;
-}
-
-function kpse_find_pk_impl(nameptr, dpi) {
-    const reqname = UTF8ToString(nameptr);
-    if (reqname.includes("/"))
-        return 0;
-    if (reqname.endsWith(".vf") || reqname.endsWith(".aux"))
-        return 0;
-
-    const filepath = `${TEXCACHEROOT}/pk/${dpi}/${reqname}`;
-    if (texlive404_cache.has(filepath))
-        return 0;
-
-    const remote_url = `${texlive_endpoint}${filepath}`;
-    let xhr = new XMLHttpRequest();
-    xhr.open("GET", remote_url, false);
-    xhr.timeout = 150000;
-    xhr.responseType = "arraybuffer";
-
-    try {
-        xhr.send();
-    } catch (err) {
-        console.log("TexLive Download Failed " + remote_url);
-        return 0;
-    }
-
-    if (xhr.status === 200) {
-        writeFileRecursive(OPFS_PREFIX + filepath, new Uint8Array(xhr.response));
-        return _allocate(intArrayFromString(OPFS_PREFIX + filepath));
-    } else if (xhr.status === 301) {
-        console.log("TexLive File not exists " + remote_url);
+        console.warn("TexLive file not exists " + remote_url);
         texlive404_cache.add(filepath);
         return 0;
     }
 
     return 0;
-
 }
