@@ -5,6 +5,15 @@
 #include <pdftexd.h>
 #include <stdlib.h>
 #include <libgen.h>
+
+#include <emscripten.h>
+
+EM_JS(char*, kpse_find_file_js, (const char* name, kpse_file_format_type format, boolean must_exist), {
+  return kpse_find_file_impl(name, format, must_exist);
+});
+
+extern char* kpse_find_pk_js(const char* passed_fontname,  unsigned int dpi);
+
 void setupboundvariable(integer *var, const_string var_name, integer dflt) {
 
   *var = dflt;
@@ -167,18 +176,14 @@ void xfseeko(FILE *f, off_t offset, int wherefrom, const_string filename) {
 FILE *xfopen(const_string filename, const_string mode) {
   FILE *f;
 
-  // assert(filename && mode);
-
   f = fopen(filename, mode);
   if (f == NULL) {
-    fprintf(stderr, "File Open Failed (%s)\n", filename);
+    fprintf(stderr, "File xfopen failed (%s) (%d)\n", filename, errno);
     abort();
   }
 
   return f;
 }
-
-
 
 int xfclose(FILE *stream, const_string filename) {
   int ret = fclose(stream);
@@ -186,15 +191,8 @@ int xfclose(FILE *stream, const_string filename) {
     fprintf(stderr, "File Close Failed %s", filename);
     abort();
   }
-  return 0;
+  return ret;
 }
-
-extern char* kpse_find_file_js(const char* name, kpse_file_format_type format,
-                     boolean must_exist);
-
-
-extern char* kpse_find_pk_js(const char* passed_fontname,  unsigned int dpi);
-
 
 static void fix_extension(char *local_name, int format) {
 #define SUFFIX(suf) strcat(local_name, suf);
@@ -351,7 +349,7 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
 
   char* local_name = xmalloc(MAX_PATH_LEN + 32);
   strcpy(local_name, name);
-  
+
   // Search local directory
   if (access(local_name, F_OK) != -1) {
     return local_name;
@@ -365,6 +363,13 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
     if (access(local_name, F_OK) != -1) {
       return local_name;
     }
+  }
+
+  // Check if file exists in opfs directory
+  memset(local_name, 0, MAX_PATH_LEN + 32);
+  sprintf(local_name, "/opfs/pdftex/%d/%s", format, name);
+  if (access(local_name, F_OK) != -1) {
+    return local_name;
   }
 
   // End local Search
@@ -398,7 +403,7 @@ char* kpse_find_pk(const char* fontname,  unsigned int dpi) {
 
   // End local Search
   free(local_name);
-  
+
   // Head to network search
   return kpse_find_pk_js(fontname, dpi);
 }

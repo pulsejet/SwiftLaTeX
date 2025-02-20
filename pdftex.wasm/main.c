@@ -82,7 +82,7 @@ void topenin(void) {
   buffer[k] = 0;
   bootstrapcmd[0] = 0;
   for (last = first; buffer[last]; ++last) {
-    
+
   }
 }
 
@@ -502,7 +502,7 @@ int main(int argc, char **argv) {
       output_directory = optarg;
       break;
   }
-  
+
   if (iniversion != 1) {
     for (int index = optind; index < argc; index++) {
       strncpy(bootstrapcmd, argv[index], MAXMAINFILENAME);
@@ -532,6 +532,8 @@ int main(int argc, char **argv) {
 }
 #else
 
+#include <emscripten/wasmfs.h>
+
 char main_entry_file[MAXMAINFILENAME];
 
 int _compile() {
@@ -553,6 +555,7 @@ int _compile() {
 }
 
 int compileLaTeX() {
+    chdir("/opfs/work");
     if (strlen(main_entry_file) == 0) {
       return -1;
     }
@@ -589,7 +592,9 @@ int setMainEntry(const char *p) {
 }
 
 int main(int argc, char **argv) {
-    printf("SwiftLaTeX Engine Loaded\n");
+    backend_t opfs = wasmfs_create_opfs_backend();
+    int err = wasmfs_create_directory("/opfs", 0777, opfs);
+    assert(err == 0);
 }
 
 #endif

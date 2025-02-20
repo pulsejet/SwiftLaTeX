@@ -1,10 +1,15 @@
 const TEXCACHEROOT = "/pdftex";
 const WORKROOT = "/work";
+const OPFS_PREFIX = "/opfs";
+
 var Module = {};
 self.memlog = "";
 self.initmem = undefined;
 self.mainfile = "main.tex";
-self.texlive_endpoint = "https://texlive2.swiftlatex.com";
+
+/** @type {string} */
+let texlive_endpoint = "https://texlive2.swiftlatex.com";
+
 Module['print'] = function(a) {
     self.memlog += (a + "\n");
 };
@@ -14,10 +19,20 @@ Module['printErr'] = function(a) {
     console.log(a);
 };
 
-Module['preRun'] = function() {
-    FS.mkdir(TEXCACHEROOT);
-    FS.mount(IDBFS, { autoPersist: true }, TEXCACHEROOT);
-    FS.mkdir(WORKROOT);
+Module['postRun'] = function() {
+    self.initmem = dumpHeapMemory();
+    self.postMessage({ 'result': 'ok' });
+};
+
+Module['onAbort'] = function() {
+    self.memlog += 'Engine crashed';
+    self.postMessage({
+        'result': 'failed',
+        'status': -254,
+        'log': self.memlog,
+        'cmd': 'compile'
+    });
+    return;
 };
 
 function _allocate(content) {
@@ -30,7 +45,6 @@ function dumpHeapMemory() {
     var src = wasmMemory.buffer;
     var dst = new Uint8Array(src.byteLength);
     dst.set(new Uint8Array(src));
-    // console.log("Dumping " + src.byteLength);
     return dst;
 }
 
@@ -41,29 +55,10 @@ function restoreHeapMemory() {
     }
 }
 
-function closeFSStreams() {
-    for (var i = 0; i < FS.streams.length; i++) {
-        var stream = FS.streams[i];
-        if (!stream || stream.fd <= 2) {
-            continue;
-        }
-        FS.close(stream);
-    }
-}
-
 function prepareExecutionContext() {
     self.memlog = '';
     restoreHeapMemory();
-    closeFSStreams();
-    FS.chdir(WORKROOT);
 }
-
-Module['postRun'] = function() {
-    self.initmem = dumpHeapMemory();
-    FS.syncfs(true, () => {
-        self.postMessage({ 'result': 'ok' });
-    });
-};
 
 function cleanDir(dir) {
     let l = FS.readdir(dir);
@@ -100,24 +95,13 @@ function cleanDir(dir) {
     }
 }
 
-
-
-Module['onAbort'] = function() {
-    self.memlog += 'Engine crashed';
-    self.postMessage({
-        'result': 'failed',
-        'status': -254,
-        'log': self.memlog,
-        'cmd': 'compile'
-    });
-    return;
-};
-
 function compileLaTeXRoutine() {
     prepareExecutionContext();
-    const setMainFunction = cwrap('setMainEntry', 'number', ['string']);
-    setMainFunction(self.mainfile);
-    let status = _compileLaTeX();
+
+    // Set the main entry to compile
+    cwrap('setMainEntry', 'number', ['string'])(self.mainfile);
+
+    let status = ccall('compileLaTeX', 'number', [], []);
     if (status === 0) {
         let pdfArrayBuffer = null;
         _compileBibtex();
@@ -225,13 +209,13 @@ function writeFileRecursive(filename, content) {
 
 function writeFileRoutine(filename, content) {
     try {
-        writeFileRecursive(`${WORKROOT}/${filename}`, content);
+        writeFileRecursive(`${OPFS_PREFIX}${WORKROOT}${filename}`, content);
         self.postMessage({
             'result': 'ok',
             'cmd': 'writefile'
         });
     } catch (err) {
-        console.error("Unable to write mem file");
+        console.error("Unable to write file", err);
         self.postMessage({
             'result': 'failed',
             'cmd': 'writefile'
@@ -240,9 +224,7 @@ function writeFileRoutine(filename, content) {
 }
 
 function setTexliveEndpoint(url) {
-    if (url) {
-        self.texlive_endpoint = url;
-    }
+    texlive_endpoint = url || texlive_endpoint;
 }
 
 self['onmessage'] = function(ev) {
@@ -281,10 +263,8 @@ function kpse_find_file_impl(nameptr, format, _mustexist) {
     const filepath = `${TEXCACHEROOT}/${format}/${reqname}`;
     if (texlive404_cache.has(filepath))
         return 0;
-    if (FS.analyzePath(filepath).exists)
-        return _allocate(intArrayFromString(filepath));
 
-    const remote_url = `${self.texlive_endpoint}${filepath}`;
+    const remote_url = `${texlive_endpoint}${filepath}`;
     let xhr = new XMLHttpRequest();
     xhr.open("GET", remote_url, false);
     xhr.timeout = 150000;
@@ -298,8 +278,8 @@ function kpse_find_file_impl(nameptr, format, _mustexist) {
     }
 
     if (xhr.status === 200) {
-        writeFileRecursive(filepath, new Uint8Array(xhr.response));
-        return _allocate(intArrayFromString(filepath));
+        writeFileRecursive(OPFS_PREFIX + filepath, new Uint8Array(xhr.response));
+        return _allocate(intArrayFromString(OPFS_PREFIX + filepath));
     } else if (xhr.status === 301) {
         console.warn("TexLive File not exists " + remote_url);
         texlive404_cache.add(filepath);
@@ -318,10 +298,8 @@ function kpse_find_pk_impl(nameptr, dpi) {
     const filepath = `${TEXCACHEROOT}/pk/${dpi}/${reqname}`;
     if (texlive404_cache.has(filepath))
         return 0;
-    if (FS.analyzePath(filepath).exists)
-        return _allocate(intArrayFromString(filepath));
 
-    const remote_url = `${self.texlive_endpoint}${filepath}`;
+    const remote_url = `${texlive_endpoint}${filepath}`;
     let xhr = new XMLHttpRequest();
     xhr.open("GET", remote_url, false);
     xhr.timeout = 150000;
@@ -335,8 +313,8 @@ function kpse_find_pk_impl(nameptr, dpi) {
     }
 
     if (xhr.status === 200) {
-        writeFileRecursive(filepath, new Uint8Array(xhr.response));
-        return _allocate(intArrayFromString(filepath));
+        writeFileRecursive(OPFS_PREFIX + filepath, new Uint8Array(xhr.response));
+        return _allocate(intArrayFromString(OPFS_PREFIX + filepath));
     } else if (xhr.status === 301) {
         console.log("TexLive File not exists " + remote_url);
         texlive404_cache.add(filepath);
