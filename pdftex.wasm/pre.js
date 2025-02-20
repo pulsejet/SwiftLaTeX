@@ -2,28 +2,31 @@ const TEXCACHEROOT = "/pdftex";
 const WORKROOT = "/work";
 
 var Module = {};
-self.memlog = "";
-self.initmem = undefined;
-self.mainfile = "main.tex";
 
-/** @type {string} */
+/** @type {string} Log from WASM */
+self.memlog = "";
+
+/** @type {Uint8Array} Initialized WASM memory */
+let initmem = undefined;
+
+/** @type {string} TeXLive endpoint */
 let texlive_endpoint = "https://texlive2.swiftlatex.com";
 
-Module['print'] = function(a) {
+Module['print'] = function (a) {
     self.memlog += (a + "\n");
 };
 
-Module['printErr'] = function(a) {
+Module['printErr'] = function (a) {
     self.memlog += (a + "\n");
-    console.log(a);
+    console.warn(a);
 };
 
-Module['postRun'] = function() {
-    self.initmem = dumpHeapMemory();
+Module['postRun'] = function () {
+    dumpHeapMemory();
     self.postMessage({ 'result': 'ok' });
 };
 
-Module['onAbort'] = function() {
+Module['onAbort'] = function () {
     self.memlog += 'Engine crashed';
     self.postMessage({
         'result': 'failed',
@@ -34,24 +37,33 @@ Module['onAbort'] = function() {
     return;
 };
 
+/**
+ * Malloc inside WASM memory
+ * @param {Uint8Array} content Content to allocate
+ * @returns Pointer to the allocated memory
+ */
 function _allocate(content) {
     let res = _malloc(content.length);
     HEAPU8.set(new Uint8Array(content), res);
     return res;
 }
 
+/**
+ * Dump the current heap memory
+ * @returns {void}
+ */
 function dumpHeapMemory() {
-    var src = wasmMemory.buffer;
-    var dst = new Uint8Array(src.byteLength);
-    dst.set(new Uint8Array(src));
-    return dst;
+    self.initmem = new Uint8Array(wasmMemory.buffer.byteLength);
+    self.initmem.set(new Uint8Array(wasmMemory.buffer));
 }
 
+/**
+ * Restore the heap memory from the initial state
+ * @returns {void}
+ */
 function restoreHeapMemory() {
-    if (self.initmem) {
-        var dst = new Uint8Array(wasmMemory.buffer);
-        dst.set(self.initmem);
-    }
+    if (self.initmem)
+        new Uint8Array(wasmMemory.buffer).set(self.initmem);
 }
 
 /**
@@ -60,11 +72,6 @@ function restoreHeapMemory() {
  * @param {string} path
  */
 async function prepareFS(folder, path) {
-    if (folder === null) {
-        const root = await self.navigator.storage.getDirectory();
-        return await prepareFS(root, path);
-    }
-
     // Create folder if not exists
     if (!FS.analyzePath(path).exists)
         FS.mkdir(path);
@@ -96,104 +103,83 @@ async function prepareExecutionContext() {
     // Prepare memory FS from OPFS.
     // When JSPI is available, hopefully WASMFS will be fast enough to be used
     // directly, and we can skip this step entirely.
-    await prepareFS(null, '/');
+    const root = await self.navigator.storage.getDirectory();
+    await prepareFS(root, '/');
 }
 
+/**
+ * Routine to compile the main TeX file
+ * @returns {void}
+ */
 async function compileLaTeXRoutine() {
-    await prepareExecutionContext();
+    let status = -253;
 
-    // Set the main entry to compile
-    cwrap('setMainEntry', 'number', ['string'])(self.mainfile);
-
-    let status = ccall('compileLaTeX', 'number', [], []);
-    if (status === 0) {
-        let pdfArrayBuffer = null;
-        _compileBibtex();
-        try {
-            const mainbasename = self.mainfile.split('.').slice(0, -1).join('.');
-            const pdfurl = `${WORKROOT}/${mainbasename}.pdf`;
-            pdfArrayBuffer = FS.readFile(pdfurl, { encoding: 'binary' });
-        } catch (err) {
-            console.error("Fetch content failed.");
-            status = -253;
-            self.postMessage({
-                'result': 'failed',
-                'status': status,
-                'log': self.memlog,
-                'cmd': 'compile'
-            });
-            return;
-        }
-        self.postMessage({
-            'result': 'ok',
-            'status': status,
-            'log': self.memlog,
-            'pdf': pdfArrayBuffer.buffer,
-            'cmd': 'compile'
-        }, [pdfArrayBuffer.buffer]);
-    } else {
-        console.error("Compilation failed, with status code " + status);
-        self.postMessage({
-            'result': 'failed',
-            'status': status,
-            'log': self.memlog,
-            'cmd': 'compile'
-        });
-    }
-}
-
-function compileFormatRoutine() {
-    prepareExecutionContext();
-    let status = _compileFormat();
-    if (status === 0) {
-        let pdfArrayBuffer = null;
-        try {
-            let pdfurl = WORKROOT + "/pdflatex.fmt";
-            pdfArrayBuffer = FS.readFile(pdfurl, {
-                encoding: 'binary'
-            });
-        } catch (err) {
-            console.error("Fetch content failed.");
-            status = -253;
-            self.postMessage({
-                'result': 'failed',
-                'status': status,
-                'log': self.memlog,
-                'cmd': 'compile'
-            });
-            return;
-        }
-        self.postMessage({
-            'result': 'ok',
-            'status': status,
-            'log': self.memlog,
-            'pdf': pdfArrayBuffer.buffer,
-            'cmd': 'compile'
-        }, [pdfArrayBuffer.buffer]);
-    } else {
-        console.error("Compilation format failed, with status code " + status);
-        self.postMessage({
-            'result': 'failed',
-            'status': status,
-            'log': self.memlog,
-            'cmd': 'compile'
-        });
-    }
-}
-
-function mkdirRoutine(dirname) {
     try {
-        //console.log("removing " + item);
-        FS.mkdir(WORKROOT + "/" + dirname);
+        await prepareExecutionContext();
+
+        // Set the main entry to compile
+        const mainfile = "main.tex";
+        cwrap('setMainEntry', 'number', ['string'])(mainfile);
+
+        // Compile LaTeX
+        status = ccall('compileLaTeX', 'number', [], []);
+        if (status !== 0) throw new Error("Compilation failed");
+
+        // Compile Bibtex
+        ccall('compileBibtex', 'number', [], []); // allow failure (?)
+
+        // Fetch the PDF file
+        const mainbasename = mainfile.split('.').slice(0, -1).join('.');
+        const pdfurl = `${WORKROOT}/${mainbasename}.pdf`;
+        const pdfArrayBuffer = FS.readFile(pdfurl, { encoding: 'binary' });
+
         self.postMessage({
             'result': 'ok',
-            'cmd': 'mkdir'
-        });
+            'status': status,
+            'log': self.memlog,
+            'pdf': pdfArrayBuffer.buffer,
+            'cmd': 'compile'
+        }, [pdfArrayBuffer.buffer]);
     } catch (err) {
-        console.error("Not able to mkdir " + dirname);
+        console.error(err);
         self.postMessage({
             'result': 'failed',
-            'cmd': 'mkdir'
+            'status': status,
+            'log': `${self.memlog}\n${err}`,
+            'cmd': 'compile'
+        });
+    }
+}
+
+/**
+ * Routine to compile the format
+ * @returns {void}
+ */
+async function compileFormatRoutine() {
+    let status = -253;
+
+    try {
+        await prepareExecutionContext();
+        let status = _compileFormat();
+        if (status !== 0) throw new Error("Format compilation failed");
+
+        const formatUrl = `${WORKROOT}/pdflatex.fmt`;
+        const formatBuffer = FS.readFile(formatUrl, { encoding: 'binary' });
+
+        self.postMessage({
+            'result': 'ok',
+            'status': status,
+            'log': self.memlog,
+            'format': formatBuffer.buffer,
+            'cmd': 'compile'
+        }, [formatBuffer.buffer]);
+    } catch (err) {
+        console.error(err);
+        self.postMessage({
+            'result': 'failed',
+            'status': status,
+            'log': `${self.memlog}\n\n${err}`,
+            'cmd': 'compile'
         });
     }
 }
@@ -243,52 +229,10 @@ async function writeFileOpfsRecursive(filename, content) {
     await writable.close();
 }
 
-function writeFileRoutine(filename, content) {
-    try {
-        writeFileRecursive(`${WORKROOT}${filename}`, content, false);
-        self.postMessage({
-            'result': 'ok',
-            'cmd': 'writefile'
-        });
-    } catch (err) {
-        console.error("Unable to write file", err);
-        self.postMessage({
-            'result': 'failed',
-            'cmd': 'writefile'
-        });
-    }
-}
-
-function setTexliveEndpoint(url) {
-    texlive_endpoint = url || texlive_endpoint;
-}
-
-self['onmessage'] = function(ev) {
-    let data = ev['data'];
-    let cmd = data['cmd'];
-    if (cmd === 'compilelatex') {
-        compileLaTeXRoutine();
-    } else if (cmd === 'compileformat') {
-        compileFormatRoutine();
-    } else if (cmd === "settexliveurl") {
-        setTexliveEndpoint(data['url']);
-    } else if (cmd === "mkdir") {
-        mkdirRoutine(data['url']);
-    } else if (cmd === "writefile") {
-        writeFileRoutine(data['url'], data['src']);
-    } else if (cmd === "setmainfile") {
-        self.mainfile = data['url'];
-    } else if (cmd === "grace") {
-        console.error("Gracefully Close");
-        self.close();
-    } else if (cmd === "flushcache") {
-        // cleanDir(WORKROOT);
-    } else {
-        console.error("Unknown command " + cmd);
-    }
-};
-
+/** Cache of errors from server */
 const texlive404_cache = new Set();
+
+/** Fetch a file from the network synchronously */
 function kpse_find_file_impl(nameptr) {
     /** @type {string} */
     const filepath = UTF8ToString(nameptr);
@@ -321,3 +265,20 @@ function kpse_find_file_impl(nameptr) {
 
     return 0;
 }
+
+self.onmessage = function (event) {
+    const data = event.data;
+    const cmd = data.cmd;
+
+    if (cmd === 'compilelatex') {
+        compileLaTeXRoutine();
+    } else if (cmd === 'compileformat') {
+        compileFormatRoutine();
+    } else if (cmd === "settexliveurl") {
+        texlive_endpoint = data.url || texlive_endpoint;
+    } else if (cmd === "close") {
+        self.close();
+    } else {
+        console.error("Unknown command " + cmd);
+    }
+};
