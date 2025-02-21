@@ -64,7 +64,8 @@ function restoreHeapMemory() {
 }
 
 /**
- * Write folder to FS recursively
+ * Write folders to FS recursively
+ *
  * @param {FileSystemDirectoryHandle} folder
  * @param {string} path
  */
@@ -75,20 +76,8 @@ async function prepareFS(folder, path) {
 
     // Write files and folders recursively
     for await (const [name, handle] of folder.entries()) {
-        const filepath = `${path}/${name}`;
-
-        if (handle instanceof FileSystemFileHandle) {
-            const content = await handle.getFile();
-
-            // Skip if file exists and not modified
-            if (FS.analyzePath(filepath).exists && content.lastModified <= (FS.stat(filepath)?.mtime ?? 0))
-                continue;
-
-            const bytes = await content.arrayBuffer();
-            FS.writeFile(filepath, new Uint8Array(bytes));
-            FS.utime(filepath, content.lastModified, content.lastModified);
-        } else if (handle instanceof FileSystemDirectoryHandle) {
-            await prepareFS(handle, filepath);
+        if (handle instanceof FileSystemDirectoryHandle) {
+            await prepareFS(handle, `${path}/${name}`);
         }
     }
 }
@@ -98,13 +87,22 @@ async function prepareFS(folder, path) {
  */
 async function prepareExecutionContext() {
     memlog = String();
-    restoreHeapMemory();
+    cleanupExecutionContext();
 
     // Prepare memory FS from OPFS.
     // When JSPI is available, hopefully WASMFS will be fast enough to be used
     // directly, and we can skip this step entirely.
     const root = await self.navigator.storage.getDirectory();
     await prepareFS(root, '/');
+}
+
+/**
+ * Clear heap and cache memory
+ */
+function cleanupExecutionContext() {
+    restoreHeapMemory();
+    opfs404_cache.clear();
+    opfsdir_cache.clear();
 }
 
 /**
@@ -119,18 +117,15 @@ async function compileLaTeXRoutine(workdir, mainfile) {
     try {
         await prepareExecutionContext();
 
-        // Change to the working directory
-        FS.chdir(workdir);
-
         // Set the main entry to compile
-        cwrap('setMainEntry', 'number', ['string'])(mainfile);
+        cwrap('setMainEntry', 'number', ['string', 'string'])(workdir, mainfile);
 
         // Compile LaTeX
-        status = ccall('compileLaTeX', 'number', [], []);
+        status = await ccall('compileLaTeX', 'number', [], [], { async: true });
         if (status !== 0) throw new Error("Compilation failed");
 
         // Compile Bibtex
-        ccall('compileBibtex', 'number', [], []); // allow failure (?)
+        await ccall('compileBibtex', 'number', [], [], { async: true }); // allow failure (?)
 
         // Fetch the PDF file
         const mainbasename = mainfile.split('.').slice(0, -1).join('.');
@@ -152,6 +147,8 @@ async function compileLaTeXRoutine(workdir, mainfile) {
             'log': `${memlog}\n${err}`,
             'cmd': 'compile'
         });
+    } finally {
+        cleanupExecutionContext();
     }
 }
 
@@ -167,7 +164,6 @@ async function compileFormatRoutine() {
         let status = _compileFormat();
         if (status !== 0) throw new Error("Format compilation failed");
 
-        FS.chdir('/');
         const formatUrl = `/pdflatex.fmt`;
         const formatBuffer = FS.readFile(formatUrl, { encoding: 'binary' });
 
@@ -186,6 +182,8 @@ async function compileFormatRoutine() {
             'log': `${memlog}\n\n${err}`,
             'cmd': 'compile'
         });
+    } finally {
+        cleanupExecutionContext();
     }
 }
 
@@ -199,7 +197,7 @@ async function compileFormatRoutine() {
 function writeFileRecursive(filename, content, opfs) {
     if (typeof content === 'string') {
         content = new TextEncoder().encode(content);
-    } else if (content instanceof ArrayBuffer || content instanceof Uint8Array) {
+    } else if (content instanceof Uint8Array) {
         // Do nothing
     } else {
         throw new Error("Invalid content type");
@@ -238,7 +236,7 @@ async function writeFileOpfsRecursive(filename, content) {
 const texlive404_cache = new Set();
 
 /** Fetch a file from the network synchronously */
-function kpse_find_file_impl(nameptr) {
+async function kpse_find_file_impl(nameptr) {
     /** @type {string} */
     const filepath = UTF8ToString(nameptr);
     if (filepath.endsWith(".vf") || filepath.endsWith(".aux") || filepath.includes("./"))
@@ -246,32 +244,100 @@ function kpse_find_file_impl(nameptr) {
     if (texlive404_cache.has(filepath))
         return 0;
 
+    const syncPtr = await kpse_sync_file_impl(0, filepath);
+    if (syncPtr) return syncPtr; // synced from opfs
+
     // make the url conforming to the texlive endpoint
     const fileurlpath = filepath.replace("/__pdftex/", "/pdftex/");
 
     const remote_url = `${texlive_endpoint}${fileurlpath}`;
-    let xhr = new XMLHttpRequest();
-    xhr.open("GET", remote_url, false);
-    xhr.timeout = 150000;
-    xhr.responseType = "arraybuffer";
-
-    try {
-        xhr.send();
-    } catch (err) {
+    const response = await fetch(remote_url);
+    if (!response.ok) {
         console.warn("TexLive download failed: " + remote_url);
-        return 0;
-    }
-
-    if (xhr.status === 200) {
-        writeFileRecursive(filepath, new Uint8Array(xhr.response), true);
-        return _allocate(intArrayFromString(filepath));
-    } else if (xhr.status === 301) {
-        console.warn("TexLive file not exists " + remote_url);
         texlive404_cache.add(filepath);
         return 0;
     }
 
-    return 0;
+    const buffer = await response.arrayBuffer();
+    writeFileRecursive(filepath, new Uint8Array(buffer), true);
+    return _allocate(intArrayFromString(filepath));
+}
+
+/** Cache of errors from server */
+const opfs404_cache = new Set();
+const opfsdir_cache = new Map();
+
+/**
+ * Sync file from OPFS to WASM memory FS
+ *
+ * @param {number} cwdptr Current working directory
+ * @param {number|string} nameptr File name
+ *
+ * @returns {Promise<number>} path pointer if file is synced, 0 otherwise
+ */
+async function kpse_sync_file_impl(cwdptr, nameptr) {
+    const cwd = cwdptr ? UTF8ToString(cwdptr) : null;
+    const name = typeof nameptr === "string" ? nameptr : UTF8ToString(nameptr)
+
+    let path = name;
+    if (!name.startsWith("/") && cwd) {
+        path = `${cwd}/${name}`;
+    }
+
+    if (opfs404_cache.has(path))
+        return 0;
+
+    try {
+        const parts = path.split('/').filter(Boolean);
+
+        // Resolve . and .. in path
+        for (let i = 0; i < parts.length; i++) {
+            if (parts[i] === ".") {
+                parts.splice(i, 1);
+                i--;
+            } else if (parts[i] === "..") {
+                if (i === 0) throw new Error("Invalid file name");
+                parts.splice(i - 1, 2);
+                i -= 2;
+            }
+        }
+
+        // Check directory cache
+        const dirpath = parts.slice(0, -1).join('/');
+        let folder = opfsdir_cache.get(dirpath);
+
+        // Get the directory from OPFS
+        if (!folder) {
+            folder = await self.navigator.storage.getDirectory();
+            for (let i = 0; i < parts.length - 1; i++) {
+                folder = await folder.getDirectoryHandle(parts[i], { create: false });
+                if (!folder) throw new Error("Directory not found");
+            }
+
+            // Cache the directory
+            opfsdir_cache.set(dirpath, folder);
+        }
+
+        // Get the file from OPFS
+        const basename = parts[parts.length - 1];
+        if (!basename) throw new Error("Invalid file name");
+
+        const file = await folder.getFileHandle(basename, { create: false });
+        if (!file) throw new Error("File not found");
+
+        // Write the file to WASM memory FS
+        const content = await file.getFile();
+        const buffer = await content.arrayBuffer();
+        writeFileRecursive(path, new Uint8Array(buffer), false);
+
+        if (path.startsWith(cwd))
+            return _allocate(intArrayFromString(path));
+        else
+            return _allocate(intArrayFromString(path));
+    } catch (err) {
+        opfs404_cache.add(name);
+        return 0;
+    }
 }
 
 self.onmessage = function (event) {

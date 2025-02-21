@@ -8,8 +8,12 @@
 
 #include <emscripten.h>
 
-EM_JS(char*, kpse_find_file_js, (const char* name), {
-  return kpse_find_file_impl(name);
+EM_ASYNC_JS(char*, kpse_sync_file_js, (const char* cwd, const char* name), {
+  return await kpse_sync_file_impl(cwd, name);
+});
+
+EM_ASYNC_JS(char*, kpse_find_file_js, (const char* name), {
+  return await kpse_find_file_impl(name);
 });
 
 void setupboundvariable(integer *var, const_string var_name, integer dflt) {
@@ -364,14 +368,28 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
   }
 
   // Check if file exists in opfs directory
-  sprintf(local_name, "/__pdftex/%d/%s", format, name);
-  if (access(local_name, F_OK) != -1) {
-    return local_name;
+  const char* cache_path = xmalloc(MAX_PATH_LEN);
+  sprintf(cache_path, "/__pdftex/%d/%s", format, name);
+  if (access(cache_path, F_OK) != -1) {
+    free(local_name);
+    return cache_path;
+  }
+
+  // Sync the file from filesystem if it exists
+  char* cwd = xmalloc(MAX_PATH_LEN);
+  getcwd(cwd, MAX_PATH_LEN);
+  char* synced = kpse_sync_file_js(cwd, local_name);
+  free(cwd);
+  if (synced != NULL) {
+    free(cache_path);
+    free(local_name);
+    return synced;
   }
 
   // Head to network search
-  char* net_name = kpse_find_file_js(local_name);
+  char* net_name = kpse_find_file_js(cache_path);
 
+  free(cache_path);
   free(local_name);
   return net_name;
 
@@ -398,14 +416,28 @@ char* kpse_find_pk(const char* fontname, unsigned int dpi) {
   }
 
   // Check if file exists in opfs directory
-  sprintf(local_name, "/__pdftex/pk/%d/%s", dpi, fontname);
-  if (access(local_name, F_OK) != -1) {
-    return local_name;
+  const char* cache_path = xmalloc(MAX_PATH_LEN);
+  sprintf(cache_path, "/__pdftex/pk/%d/%s", dpi, fontname);
+  if (access(cache_path, F_OK) != -1) {
+    free(local_name);
+    return cache_path;
+  }
+
+  // Sync the file from filesystem if it exists
+  char* cwd = xmalloc(MAX_PATH_LEN);
+  getcwd(cwd, MAX_PATH_LEN);
+  char* synced = kpse_sync_file_js(cwd, local_name);
+  free(cwd);
+  if (synced != NULL) {
+    free(cache_path);
+    free(local_name);
+    return synced;
   }
 
   // Head to network search
-  char* net_name = kpse_find_file_js(local_name);
+  char* net_name = kpse_find_file_js(cache_path);
 
+  free(cache_path);
   free(local_name);
   return net_name;
 }

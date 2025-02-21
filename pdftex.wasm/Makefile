@@ -5,9 +5,9 @@ CXX          	= 	em++
 CFLAGS       	= 	-O3 \
 					-s USE_ZLIB=1 -s USE_LIBPNG=1 \
 					-Wno-parentheses-equality -Wno-pointer-sign -fno-rtti -fno-exceptions \
-					-DWEBASSEMBLY_BUILD
+					-DWEBASSEMBLY_BUILD -flto
 
-CXX_LINK     	= 	$(CXX) -o $@ $(CFLAGS)
+CXX_LINK     	= 	$(CXX) -o $@ $(CFLAGS) -sASYNCIFY=1 -s WASMFS=1 -sFORCE_FILESYSTEM=1 -flto
 
 TEXSOURCES   	= 	tex/pdftex0.c \
 					tex/pdftexini.c \

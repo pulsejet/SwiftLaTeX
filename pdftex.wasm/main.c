@@ -546,11 +546,10 @@ int _compile() {
   interactionoption = 1;
   filelineerrorstylep = 0;
   parsefirstlinep = 0;
-  // Go
+
   if (setjmp(jmpenv) == 0)
     mainbody();
 
-  // printf("Compile stop with %d\n", exit_code);
   return exit_code;
 }
 
@@ -583,13 +582,6 @@ int compileBibtex() {
     return bibtex_main(main_aux_file);
 }
 
-int setMainEntry(const char *p) {
-    strncpy(main_entry_file, p, MAXMAINFILENAME);
-    main_entry_file[MAXMAINFILENAME - 1] = 0;
-    // fprintf(stderr,"setting main entry from c %s\n", main_entry_file);
-    return 0;
-}
-
 int wasmSetupDirs(const char *filename) {
     // Recursively create directory
     char *dir = strdup(filename);
@@ -620,6 +612,16 @@ int wasmWriteFile(const char *filename, const uint8_t *content, int len) {
 
     free((void *)content);
     return ret;
+}
+
+int setMainEntry(const char* cwd, const char *p) {
+  wasmSetupDirs(cwd);
+  chdir(cwd);
+
+  strncpy(main_entry_file, p, MAXMAINFILENAME);
+  main_entry_file[MAXMAINFILENAME - 1] = 0;
+
+  return 0;
 }
 
 int main(int argc, char **argv) {
