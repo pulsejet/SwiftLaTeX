@@ -249,9 +249,14 @@ async function kpse_find_file_impl(nameptr) {
 
     // make the url conforming to the texlive endpoint
     const fileurlpath = filepath.replace("/__pdftex/", "/pdftex/");
+    const basename = filepath.split('/').pop();
+    if (!basename) return 0;
 
+    notify_progress(`Downloading ${basename} from TeXLive`);
     const remote_url = `${texlive_endpoint}${fileurlpath}`;
     const response = await fetch(remote_url);
+    notify_progress(null);
+
     if (!response.ok) {
         console.warn("TexLive download failed: " + remote_url);
         texlive404_cache.add(filepath);
@@ -338,6 +343,14 @@ async function kpse_sync_file_impl(cwdptr, nameptr) {
         opfs404_cache.add(name);
         return 0;
     }
+}
+
+/**
+ * Notify the progress of the compilation
+ * @param {string|null} status Status message
+ */
+function notify_progress(status) {
+    self.postMessage({ 'cmd': 'progress', 'status': status });
 }
 
 self.onmessage = function (event) {
