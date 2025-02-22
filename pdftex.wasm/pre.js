@@ -252,7 +252,7 @@ async function kpse_find_file_impl(nameptr) {
     const basename = filepath.split('/').pop();
     if (!basename) return 0;
 
-    notify_progress(`Downloading ${basename} from TeXLive`);
+    notify_progress(`Downloading ${basename}`);
     const remote_url = `${texlive_endpoint}${fileurlpath}`;
     const response = await fetch(remote_url);
     notify_progress(null);
