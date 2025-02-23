@@ -118,7 +118,7 @@ async function compileLaTeXRoutine(workdir, mainfile) {
         await prepareExecutionContext();
 
         // Set the main entry to compile
-        cwrap('setMainEntry', 'number', ['string', 'string'])(workdir, mainfile);
+        cwrap('setMainEntry', 'number', ['string', 'string'])('/opfs'+workdir, mainfile);
 
         // Compile LaTeX
         status = await ccall('compileLaTeX', 'number', [], [], { async: true });

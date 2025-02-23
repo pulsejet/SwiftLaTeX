@@ -626,9 +626,9 @@ int setMainEntry(const char* cwd, const char *p) {
 
 int main(int argc, char **argv) {
     // OPFS is too slow for now, wait for JSPI
-    // backend_t opfs = wasmfs_create_opfs_backend();
-    // int err = wasmfs_create_directory("/", 0777, opfs);
-    // assert(err == 0);
+    backend_t opfs = wasmfs_create_opfs_backend();
+    int err = wasmfs_create_directory("/opfs", 0777, opfs);
+    assert(err == 0);
 }
 
 #endif

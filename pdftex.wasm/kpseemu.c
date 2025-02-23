@@ -369,7 +369,7 @@ char* kpse_find_file(const char* name, kpse_file_format_type format,
 
   // Check if file exists in opfs directory
   const char* cache_path = xmalloc(MAX_PATH_LEN);
-  sprintf(cache_path, "/__pdftex/%d/%s", format, name);
+  sprintf(cache_path, "/opfs/__pdftex/%d/%s", format, name);
   if (access(cache_path, F_OK) != -1) {
     free(local_name);
     return cache_path;
