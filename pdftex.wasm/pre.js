@@ -226,10 +226,13 @@ async function writeFileOpfsRecursive(filename, content) {
 
     const basename = parts[parts.length - 1];
     if (!basename) return;
+
     const file = await folder.getFileHandle(basename, { create: true });
-    const writable = await file.createWritable();
-    await writable.write(content);
-    await writable.close();
+    const writable = await file.createSyncAccessHandle();
+    writable.truncate(0);
+    writable.write(content);
+    writable.flush();
+    writable.close();
 }
 
 /** Cache of errors from server */
